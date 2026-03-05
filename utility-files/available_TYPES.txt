@@ -1,0 +1,10 @@
+1 sRNAseq
+2 sRNAseqIP (use if all libraries are IPs)
+3 RNAseq
+4 CHIPseq
+5 DNAseq
+6 CLIPseq
+7 GROseq
+8 RNAseq_QuantSeq
+9 CapSeq
+10 RIPseq

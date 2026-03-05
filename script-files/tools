@@ -1,0 +1,32 @@
+#preload all aliases
+#set -a to automatically export all functions
+set -a
+
+parallel() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}APmaster.simg parallel "$@" ; }
+mawk() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}APmaster.simg mawk "$@" ; }
+sleep() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}APmaster.simg sleep "$@" ; }
+samtools() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}APmaster.simg samtools "$@" ; }
+CUTADAPT() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}APmaster.simg cutadapt "$@" ; }
+BamIndexDecoder() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}APmaster.simg java -jar /usr/local/bin/BamIndexDecoder.jar "$@" ; }
+bbduk() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}APmaster.simg bbduk.sh "$@" ;}
+fastaToFastq() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}APmaster.simg reformat.sh "$@" ;}
+sraToolkit() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}APmaster.simg "$@" ; }
+seqkit() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}APmaster.simg seqkit "$@" ; }
+STAR() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}APmaster.simg STAR "$@" ; }
+bedtools() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}APmaster.simg bedtools "$@" ; }
+bowtie() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}APmaster.simg bowtie "$@" ; }
+bowtieBuild() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}APmaster.simg bowtie-build "$@" ; }
+salmon() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}APmaster.simg salmon "$@" ; }
+makeTagDirectory() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}APmaster.simg makeTagDirectory "$@" ; }
+makeUCSCfile() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}APmaster.simg makeUCSCfile "$@" ; }
+bedGraphToBigWig() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}APmaster.simg bedGraphToBigWig "$@" ; }
+Rscript() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}R.simg Rscript "$@" ; }
+bigBedToBed() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}APmaster.simg bigBedToBed "$@" ;  }
+twoBitToFa() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}APmaster.simg twoBitToFa "$@" ;  }
+enaDataGet() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}APmaster.simg /enaBrowserTools/python3/enaDataGet "$@" ;  }
+ncftpls() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}APmaster.simg ncftpls "$@" ;  }
+bigGenePredToGenePred() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}APmaster.simg bigGenePredToGenePred "$@" ;  }
+genePredToBed() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}APmaster.simg genePredToBed "$@" ;  }
+bedparse() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  ${SINGULARITYdir}APmaster.simg bedparse "$@" ;  }
+minimap2() { singularity exec --cleanenv  -B ${TMPdir}:/tmp   ${SINGULARITYdir}APmaster.simg minimap2 "$@" ;  }
+curl() { singularity exec --cleanenv  -B ${TMPdir}:/tmp  -B /users/:/users/  ${SINGULARITYdir}APmaster.simg curl "$@" ;  }

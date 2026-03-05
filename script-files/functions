@@ -1,0 +1,962 @@
+#!/bin/bash
+#set -a to automatically export all functions
+set -a
+
+#*functions for download and demux
+#download, convert to sam and split the files
+downFunct() {
+  set -ux
+  currLIB=$1
+  currJOB=$2
+  locTMP=$3
+  redCORES=$4
+  TMPdir=$5
+  arrayID=$6
+  FOLDER=$7
+  downDIR=$8
+  LOGs=$9
+  BCtype=${10}
+
+  #@ rm -rf ${locTMP}/${currJOB}/*
+  mkdir -p ${locTMP}/${currJOB}/
+
+  if [[ -f ${TMPdir}URLs.txt ]]; then
+    downNAME=$(echo $currLIB | awk '{n=split($1,X,/\//); print X[n]}')
+
+    #pre-process fastq data to sam-format
+    if [[ $currLIB == *"https"* ]]; then
+      #if the input is a URL, download it
+      if [[ -s ${downDIR}/${downNAME} && ! -f ${downDIR}/${downNAME}.wait ]]; then
+        echo ${downNAME} already downloaded
+        inFILE=${downDIR}/${downNAME}
+      elif [[ ! -f ${downDIR}/${downNAME}.wait ]]; then
+        touch ${downDIR}/${downNAME}.wait
+
+        echo download ${downNAME}
+
+        curl --retry 5 --retry-delay 300 --netrc-file ~/.AP_login.txt ${currLIB} --output ${downDIR}/${downNAME} || {
+          echo download for ${currLIB} failed >>${locTMP}/${currJOB}/error.txt
+          exit
+        } 
+
+        rm -rf ${downDIR}/${downNAME}.wait
+      else
+        echo ${downNAME} is currently downloading - waiting for it to finish
+        SWITCH=N
+        while [[ $SWITCH == N ]]; do
+          sleep 5m 
+          if [[ ! -f ${downDIR}/${currLIB}.bam.wait ]]; then
+            SWITCH=Y
+          fi
+        done
+        
+      fi
+      inFILE=${downDIR}/${downNAME}
+
+    else
+      inFILE=${currLIB}
+    fi
+
+    if [[ $inFILE == *"tar.gz"* ]]; then
+      #unpack the tar.gz file
+      tar -xzf $inFILE -C ${locTMP}${currJOB}/
+
+      #paste R1, R2, I1, I2 fastq-files into a single sam file
+      dirNAME=$(echo $downNAME | sed 's/\.tar\.gz//')
+      if compgen -G "${locTMP}${currJOB}/${dirNAME}/fulllane/*_R2_*.fastq.gz"  > /dev/null; then
+        #if R2 is present, use it
+        seqkit fx2tab --only-id ${locTMP}${currJOB}/${dirNAME}/fulllane/*_R1_*.fastq.gz | 
+          paste - <(seqkit fx2tab --only-id ${locTMP}${currJOB}/${dirNAME}/fulllane/*_I1_*.fastq.gz) <(seqkit fx2tab --only-id ${locTMP}${currJOB}/${dirNAME}/fulllane/*_I2_*.fastq.gz) <(seqkit fx2tab --only-id ${locTMP}${currJOB}/${dirNAME}/fulllane/*_R2_*.fastq.gz) | 
+          mawk -v OFS="\t" '
+          {
+            print $1,77,"*",0,0,"*","*","0","0",$2,$3,"B2:Z:"$8,"Q2:Z:"$9,"BC:Z:"$5,"QT:Z:"$6
+            print $1,141,"*",0,0,"*","*","0","0",$11,$12
+          }' > ${locTMP}${currJOB}/input.sam
+      else
+        #if no R2 is present, use R1 only
+        seqkit fx2tab --only-id ${locTMP}${currJOB}/${dirNAME}/fulllane/*_R1_*.fastq.gz | 
+          paste - <(seqkit fx2tab --only-id ${locTMP}${currJOB}/${dirNAME}/fulllane/*_I1_*.fastq.gz) <(seqkit fx2tab --only-id ${locTMP}${currJOB}/${dirNAME}/fulllane/*_I2_*.fastq.gz) | 
+          mawk -v OFS="\t" '
+          {
+            print $1,77,"*",0,0,"*","*","0","0",$2,$3,"B2:Z:"$8,"Q2:Z:"$9,"BC:Z:"$5,"QT:Z:"$6
+          }' > ${locTMP}${currJOB}/input.sam
+      fi
+
+      READcommand="cat"
+      inFILE=${locTMP}${currJOB}/input.sam
+    
+    fi
+
+    #if the input is NGS-BAM simply convert to sam
+    READcommand="samtools view -@ 2"
+  fi
+
+
+  rm -rf ${locTMP}${currJOB}/error.txt 
+  rm -rf ${locTMP}${currJOB}/*.out.bam
+    #time 
+    $READcommand $inFILE| 
+        mawk -v OUT=${locTMP}${currJOB}/ -v OFS="\t"  -v BCfile=${locTMP}BC_file.txt -v currN=$currJOB -v BCtype=$BCtype '
+        BEGIN{
+          #import BCs from FILE
+          while((getline LINE < BCfile) > 0) {
+            if( LINE !~ "i7"){
+              split(LINE,splitLINE,/ |\t/)
+
+              #i7
+              n=split(splitLINE[1],spliti7,/~/)
+              if(n>1){
+                i7[splitLINE[4]]=spliti7[currN]
+                print currN, spliti7[currN]
+                split(spliti7[currN],splitPREi7,/:/)
+              }else{
+                i7[splitLINE[4]]=splitLINE[1]
+                split(splitLINE[1],splitPREi7,/:/)
+              }
+
+              if(splitPREi7[3]!=""){
+                if ( PRE[substr(splitPREi7[3],1,6)] != "" ) {
+                  PRE[substr(splitPREi7[3],1,6)]=PRE[substr(splitPREi7[3],1,6)] ":!!:" splitLINE[4]
+                }else{
+                  PRE[substr(splitPREi7[3],1,6)]=splitLINE[4]
+                }
+              }else{
+                NOi7="Y"
+                if ( allLIBS != "" ) {
+                  allLIBS=allLIBS ":!!:" splitLINE[4]
+                }else{
+                  allLIBS=splitLINE[4]
+                }
+              }
+              
+              #i5
+              n=split(splitLINE[2],spliti5,/~/)
+              if(n>1){
+                i5[splitLINE[4]]=spliti5[currN]
+              }else{
+                i5[splitLINE[4]]=splitLINE[2]
+              }
+              #sRBC
+              n=split(splitLINE[3],splitsRBC,/~/)
+              if(n>1){
+                sRBC[splitLINE[4]]=splitsRBC[currN]
+              }else{
+                sRBC[splitLINE[4]]=splitLINE[3]
+              }
+            }
+          }   
+        }
+        {
+          if(NR==1){
+            for(i=1; i<=NF; i++){
+              if($i~"BC:Z:") colBC=i
+              if($i~"B2:Z:") colB2=i
+            }
+          }
+          if ($2 == 77 || $2 == 4) {
+            #reset current out-lib name
+            currOUTlib=""
+
+            #determine reduced ID list for looping only if i7 is present
+            if(NOi7=="Y"){
+              #perform sRBC demux if no i7 is present
+              split(allLIBS,splitLIB,/:!!:/)
+
+              for(i in splitLIB){
+                LIB=splitLIB[i]
+                split(sRBC[LIB],splitsRBC,/=/)
+                currsRBC=splitsRBC[2] "AGATCGGAA"
+                if($10 ~ currsRBC){
+                  currOUTlib=LIB
+                }
+              }
+
+            }else{
+              #add all BCs to an array for BC stats
+              BCsum[substr($colBC,6,8)":!:"substr($colB2,6,8)]+=1
+
+              split($colBC,splitBC,/:/)
+              split(PRE[substr(splitBC[3],1,6)],splitLIB,/:!!:/)
+
+              #loop through all IDs and check for perfect barcode matches
+              for(i in splitLIB){
+                LIB=splitLIB[i]
+
+                #test for i7 match
+                if($colBC ~ i7[LIB]){
+                  #print for cases with only i7              
+                  if(i5[LIB]=="B2:Z:" && sRBC[LIB]=="sRBC="){
+                    currOUTlib=LIB
+                  }else{
+                    
+                    #test for i5 match in case i5 exists or if i5 is empty
+                    if( i5[LIB] != "B2:Z:"){i5exists="YES"}
+                    if($colB2 ~ i5[LIB] || i5[LIB] == "B2:Z:" ){
+                      #print if no sRBC is present
+                      if(sRBC[LIB]=="sRBC="){
+                        currOUTlib=LIB
+                      }else{
+                        #add sRBC matchup
+                        split(sRBC[LIB],splitsRBC,/=/)
+                        if( BCtype ~ "Stark_3prime_BC_PROseq"){
+                          currsRBC=splitsRBC[2] 
+                          testSEQ=substr($10,1,4)
+
+                          if(testSEQ == currsRBC){
+                            currOUTlib=LIB
+                            X=$10
+                            $10=substr(X,15,1000)
+                            X=$11
+                            $11=substr(X,15,1000)
+                          }
+                        }else{
+                          currsRBC=splitsRBC[2] "AGATCGGAA"
+                          if($10 ~ currsRBC){
+                            currOUTlib=LIB
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+            if(currOUTlib !=""){
+              print $0 | "samtools view -bS >> "OUT currOUTlib ".out.bam"
+            }
+            LIB=""
+          }else{
+            #print 2nd mate to same file as read before
+            if(currOUTlib !=""){
+              #remove 4 random nucleotides at the beginning of the 2nd mate of the Stark PROseq adaptors
+              if( BCtype ~ "Stark_3prime_BC_PROseq"){
+                $10=substr($10,5,1000)
+                $11=substr($11,5,1000)
+              }
+              
+              print $0 | "samtools view -bS >> "OUT currOUTlib ".out.bam"
+            }
+            currOUTlib=""
+          }
+        }
+        END{
+          if(NOi7!="Y"){
+            for(BC in BCsum){
+              split(BC, splitBC,/:!:/)
+              if(i5exists == "YES"){
+                print BCsum[BC],splitBC[1],splitBC[2] > OUT "BCsum.txt"
+              }else{
+                Y[splitBC[1]]+=BCsum[BC]
+              }
+            }
+            if(i5exists != "YES"){
+              for(BC in Y){
+                print Y[BC],BC
+              }
+            }
+          }
+        }
+        ' 2>&1 | tee ${locTMP}stderr.txt >${locTMP}${currJOB}/BCsum.txt
+
+        ERROR=$(grep "EOF marker is absent. The input is probably truncated" ${locTMP}stderr.txt)
+        if [[ -n $ERROR ]]; then
+          echo "EOF marker is absent. The input is probably truncated" >>${locTMP}${currJOB}/error.txt
+        fi
+        ERROR=$(grep "samtools view: error reading file" ${locTMP}stderr.txt)
+        if [[ -n $ERROR ]]; then
+          echo "samtools view: error reading file" >>${locTMP}${currJOB}/error.txt
+        fi
+        ERROR=$(grep "samtools view: error closing" ${locTMP}stderr.txt)
+        if [[ -n $ERROR ]]; then
+          echo "samtools view: error closing" >>${locTMP}${currJOB}/error.txt
+        fi
+
+  if [[ -s ${locTMP}${currJOB}/BCsum.txt ]]; then
+    sort -k1,1rn ${locTMP}${currJOB}/BCsum.txt >${LOGs}/all-BCs.array${arrayID}-file${currJOB}.txt
+  fi
+} 
+
+
+#downFunct_Stark_3prime_BC_PROseq
+downFunct_Stark_3prime_BC_PROseq() {
+  set -ux
+  currLIB=$1
+  currJOB=$2
+  locTMP=$3
+  redCORES=$4
+  TMPdir=$5
+  arrayID=$6
+  FOLDER=$7
+  downDIR=$8
+  LOGs=$9
+
+  rm -rf ${locTMP}/${currJOB}/*
+  mkdir -p ${locTMP}/${currJOB}/
+
+  if [[ -f ${TMPdir}URLs.txt ]]; then
+
+    downNAME=$(echo $currLIB | awk '{n=split($1,X,/\//); print X[n]}')
+    if [[ -s ${downDIR}/${downNAME} && ! -f ${downDIR}/${downNAME}.wait ]]; then
+      echo ${downNAME} already downloaded
+      inFILE=${downDIR}/${downNAME}
+    elif [[ ! -f ${downDIR}/${downNAME}.wait ]]; then
+      touch ${downDIR}/${downNAME}.wait
+
+      echo download ${downNAME}
+
+      curl --retry 5 --retry-delay 300 --netrc-file ~/.AP_login.txt ${currLIB} --output ${downDIR}/${downNAME} || {
+        echo download for ${currLIB} failed >>${locTMP}/${currJOB}/error.txt
+        exit
+      } 
+
+      rm -rf ${downDIR}/${downNAME}.wait
+    else
+      echo ${downNAME} is currently downloading - waiting for it to finish
+      SWITCH=N
+      while [[ $SWITCH == N ]]; do
+        sleep 5m 
+        if [[ ! -f ${downDIR}/${currLIB}.bam.wait ]]; then
+          SWITCH=Y
+        fi
+      done
+      
+    fi
+    inFILE=${downDIR}/${downNAME}
+  else
+    inFILE=${currLIB}
+  fi
+
+
+  #pre-process fastq data to sam-format
+  if [[ $currLIB == *"tar.gz" ]]; then
+    READcommand="cat"
+
+    
+
+    inFILE=#!???????????
+  else
+    #if the input is NGS-BAM simply convert to sam
+    READcommand="samtools view -@ 2"
+  fi
+
+  rm -rf ${locTMP}${currJOB}/error.txt 
+    #time 
+    $READcommand $inFILE| 
+      samtools view  | 
+        mawk -v OUT=${locTMP}${currJOB}/ -v OFS="\t"  -v BCfile=${locTMP}BC_file.txt -v currN=$currJOB '
+        BEGIN{
+          #import BCs from FILE
+          while((getline LINE < BCfile) > 0) {
+            if( LINE !~ "i7"){
+              split(LINE,splitLINE,/ |\t/)
+
+              #i7
+              n=split(splitLINE[1],spliti7,/~/)
+              if(n>1){
+                i7[splitLINE[4]]=spliti7[currN]
+                print currN, spliti7[currN]
+                split(spliti7[currN],splitPREi7,/:/)
+              }else{
+                i7[splitLINE[4]]=splitLINE[1]
+                split(splitLINE[1],splitPREi7,/:/)
+              }
+
+              if(splitPREi7[3]!=""){
+                if ( PRE[substr(splitPREi7[3],1,6)] != "" ) {
+                  PRE[substr(splitPREi7[3],1,6)]=PRE[substr(splitPREi7[3],1,6)] ":!!:" splitLINE[4]
+                }else{
+                  PRE[substr(splitPREi7[3],1,6)]=splitLINE[4]
+                }
+              }else{
+                NOi7="Y"
+                if ( allLIBS != "" ) {
+                  allLIBS=allLIBS ":!!:" splitLINE[4]
+                }else{
+                  allLIBS=splitLINE[4]
+                }
+              }
+              
+              #i5
+              n=split(splitLINE[2],spliti5,/~/)
+              if(n>1){
+                split(spliti5[currN],I5,/:/)
+                i5[splitLINE[4]]=I5[3]
+              }else{
+                split(splitLINE[2],I5,/:/)
+                i5[splitLINE[4]]=I5[3]
+              }
+            }
+          }   
+        }
+        {
+          if(NR==1){
+            for(i=1; i<=NF; i++){
+              if($i~"BC:Z:") colBC=i
+            }
+          }
+          if ($2 == 77 || $2 == 4) {
+            #reset current out-lib name
+            currOUTlib=""
+
+            #add all BCs to an array for BC stats
+            BCsum[substr($colBC,6,8)":!:"substr($10,1,4)]+=1
+
+            split($colBC,splitBC,/:/)
+            split(PRE[substr(splitBC[3],1,6)],splitLIB,/:!!:/)
+
+            #loop through all IDs and check for perfect barcode matches
+            for(i in splitLIB){
+              LIB=splitLIB[i]
+
+              #test for i7 match
+              if($colBC ~ i7[LIB]){
+                #test for i5 match in case i5 exists or if i5 is empty
+                if(substr($10,1,4) == i5[LIB] ){
+                  currOUTlib=LIB
+                }
+              }
+            }
+            if(currOUTlib !=""){
+              $10=substr($10,15,1000)
+              $11=substr($11,15,1000)
+              print $0 | "samtools view -bS >> "OUT currOUTlib ".bam"
+            }
+            LIB=""
+          }else{
+            #print 2nd mate to same file as read before
+            if(currOUTlib !=""){
+              $10=substr($10,5,1000)
+              $11=substr($11,5,1000)
+              print $0 | "samtools view -bS >> "OUT currOUTlib ".bam"
+            }
+            currOUTlib=""
+          }
+        }
+        END{
+          if(NOi7!="Y"){
+            for(BC in BCsum){
+              split(BC, splitBC,/:!:/)
+              if(i5exists == "YES"){
+                print BCsum[BC],splitBC[1],splitBC[2] > OUT "BCsum.txt"
+              }else{
+                Y[splitBC[1]]+=BCsum[BC]
+              }
+            }
+            if(i5exists != "YES"){
+              for(BC in Y){
+                print Y[BC],BC
+              }
+            }
+          }
+        }
+        '  >${locTMP}${currJOB}/BCsum.txt
+    
+
+  if [[ -s ${locTMP}${currJOB}/BCsum.txt ]]; then
+    sort -k1,1rn ${locTMP}${currJOB}/BCsum.txt >${LOGs}/all-BCs.array${arrayID}-file${currJOB}.txt
+  fi
+} 
+
+#demux sRBC
+demuxFunctSRBC() {
+  echo doing demuxFunctSRBC
+  currJOB=$1
+  locTMP=$2
+  BC=$3
+  BCtype=$4
+  
+  sRBCfile=${locTMP}sRBC_${BC}.fa
+  currFILE="${locTMP}${currJOB}/${BC}.sam"
+
+  mawk -v OFS="\t" '{print ">"$1 "\n" $10 }' $currFILE |
+    cutadapt --overlap 5 -e 2 --cores=2 --no-indels -a file:$sRBCfile --max-n=200 -o "${locTMP}${currJOB}/demuxed-{name}.fasta" -
+
+  rm -rf "${locTMP}${currJOB}/${BCtype}/demuxed-unknown.fasta"
+}
+
+
+#split bam file based on sRBC into individual libraries
+extractFunctSRBC() {
+    currJOB=$1
+    locTMP=$2
+    fullBC=$3
+    BCtype=$4
+
+    BC=$(echo $fullBC | tr 'i' '\t' | cut -f 1 )
+
+    demuxedSRBC=${locTMP}${currJOB}/demuxed-${fullBC}.fasta
+    currFILE="${locTMP}${currJOB}/${BC}.sam"
+ 
+    mawk -v OFS="\t" -v demuxedSRBC=$demuxedSRBC '
+    BEGIN{
+      while((getline LINE < demuxedSRBC) > 0) {
+        if(LINE~">"){
+          sub(">", "", LINE)
+          selID[LINE]=1
+        }
+      }
+    }
+    {
+      if($1 in selID) {
+        print 
+      }
+    }
+    ' $currFILE |
+    samtools view -bS - > ${locTMP}${currJOB}/${fullBC}.bam
+
+  }
+
+sraFunct() {
+  set -x
+  currLINK=$1
+  locTMP=$2
+  NAME=$3
+  N=$4
+
+  DELAY=$(shuf -i 30-300 -n 1)
+  sleep ${DELAY}s
+
+  DELAY=$(shuf -i 300-600 -n 1)
+  if [[ $N -eq 1 ]]; then EXT=1st; elif [[ $N -eq 2 ]]; then EXT=2nd; else echo "more than 2 files to download"; exit; fi
+  if [[ ! -s ${locTMP}${NAME}~1_${EXT}.tab ]]; then
+    curl --retry 5 --retry-delay $DELAY $currLINK | seqkit fx2tab --only-id  > ${locTMP}${NAME}~1_${EXT}.tab
+  fi
+  
+  if [[ ! -s ${locTMP}${NAME}~1_${EXT}.tab ]]; then
+    touch ${locTMP}${NAME}.error
+  fi
+}
+
+
+#*intersect mapping with annotations
+intersect_mappings() {
+  TMPdir=$1
+  NAME=$2
+  INDEX=$3
+  UTILITY_DIR=$4
+  i=$5
+  IN=${TMPdir}split_mapping/${NAME}_mapped${i}.bed
+
+  awk -v OFS="\t" '
+  { 
+      fullLINE=gensub(/\t/, ":x:", "G")
+      origNAME=$4":SP:"fullLINE
+      
+      n=split($11, splitENDS, /,/)
+      split($12, splitSTARTS, /,/)
+      coordSTART=$2
+      coordEND=$3
+      
+      for( i=1; i<=n; i++) {
+        $2=coordSTART+splitSTARTS[i]
+        $3=$2+splitENDS[i]
+        $4=origNAME":PC:"i":PX:"n
+        $5=n
+        $7=$2
+        $8=$3
+        $10=1
+        $11=splitENDS[i]
+        $12=0
+        print 
+      }
+  }' ${IN} | \
+  bedtools intersect -nobuf -wao -f 0.51 -split -a - -b ${INDEX} | \
+    mawk -v OFS="\t" -v UTILITY_DIR=${UTILITY_DIR} -v FILEname=${TMPdir}${NAME}_annotated.txt '
+      BEGIN {
+        #read ruleset into array, once indexed by annotation name X; once indexed by annotation priority Y
+        FILENAME=UTILITY_DIR"/ruleset.txt"; while((getline RAW_RULES < FILENAME) > 0) {split(RAW_RULES,RULESET,/\t| /); X[RULESET[3]]=RULESET[1]; Y[RULESET[1]]=RULESET[2]; nRULES+=1 }
+        OFS = FS
+        HIGHEST_PRIOR=100        
+      } 
+      { #determine orientation relative to annotation
+        if($6==$18) {
+          ID=$4
+          ANN=$16
+        }else if ($18!="."){
+          ID=$4
+          if($16 ~ "::") {
+            ANN=$16
+            gsub("::","~AS::",ANN)
+          } else {
+            ANN=$16"~AS"
+          }
+        } else {
+          ID=$4
+          ANN="none"
+        }
+        #for first entry get ID into CURR_ID
+        if(NR==1) {
+          CURR_ID=ID
+          split(ANN,PURE_ANN,/::TE:/)  
+          HIGHEST_PRIOR=X[PURE_ANN[1]]          
+        }      
+        #if it is the same ID as the previous line, only apply rules
+        if( ID == CURR_ID) {
+          #apply rules to current line
+          split(ANN,PURE_ANN,/::TE:/)
+
+          if ( X[PURE_ANN[1]] < HIGHEST_PRIOR ) {HIGHEST_PRIOR=X[PURE_ANN[1]]; PRIOR_ANN=ANN}
+        } else {
+          #is current line has different ID, print result for last ID and sett CURR_ID to the new one
+          split(CURR_ID, CURR_ID_SPLIT, /:SP:/)
+          print CURR_ID_SPLIT[1]":ann="Y[HIGHEST_PRIOR]":SP:"CURR_ID_SPLIT[2],PRIOR_ANN":~:"HIGHEST_PRIOR
+          
+          #set variables to new ID
+          CURR_ID=ID
+          HIGHEST_PRIOR=100
+          
+          #apply rules to the current line
+          split(ANN,PURE_ANN,/::TE:/)
+          HIGHEST_PRIOR=X[PURE_ANN[1]]
+          PRIOR_ANN=ANN
+        }        
+      }
+      END {
+        split(CURR_ID,CURR_ID_SPLIT,/:SP:/)
+
+        print CURR_ID_SPLIT[1]":ann="Y[HIGHEST_PRIOR]":SP:"CURR_ID_SPLIT[2],PRIOR_ANN":~:"HIGHEST_PRIOR
+
+      }
+    ' | \
+    awk -v OFS="\t" '
+    BEGIN{
+      MAX=0
+    }
+    {
+      split($1, splitFRAGcount, /:PX:/)
+      if(splitFRAGcount[2]==1) {
+        split($2,splitANN,/:~:/)
+        print $1,splitANN[1],splitANN[2]
+      } else {
+        split(splitFRAGcount[1], splitNAME, /:SP:|:PC:/)
+        split(splitNAME[2], splitBED12, /:x:/)
+        split(splitBED12[11], splitFRAGLENGTH, /,/)
+        X[splitNAME[2]][$2]+=splitFRAGLENGTH[splitNAME[3]]
+        Y[splitNAME[2]][$2]=splitNAME[1]
+      }
+    }
+    END{
+      for(ID in X) {
+        for (ANN in X[ID]) {
+          if(X[ID][ANN] > MAX) {
+            MAX=X[ID][ANN]
+            maxID=Y[ID][ANN]":SP:"ID
+            maxANN=ANN
+          }
+        }
+        split(ANN,splitANN,/:~:/)
+        print maxID,splitANN[1],splitANN[2]
+        MAX=0
+      }   
+      
+    }' > ${TMPdir}split_intersect/${NAME}_annotated_$i.txt
+}
+
+
+#* finish counts by resolving multi-mapper issues and other things
+finish_counts() {
+  i=$1
+  IN=${2}_${i}.txt
+  TMP=${3}_${i}
+  FILTERING_INPUT=$4
+  MIN_LENGTH=$5
+  MAX_LENGTH=$6
+  TYPE=$7
+
+  FILTERING_INPUT=$( echo "$FILTERING_INPUT" | tr ':' '|' )
+
+  awk -v OFS="\t" -v TMP="$TMP" -v FILTERING_INPUT="$FILTERING_INPUT" -v MINlength="$MIN_LENGTH" -v MAXlength="$MAX_LENGTH" -v TYPE=$TYPE '
+  BEGIN{
+    MAX_ANN=0
+    if(TYPE=="RNAseq" || TYPE=="RIPseq" || TYPE=="CLIPseq" || TYPE=="GROseq"){
+      rawCOMMAND="cut -f 1-12"
+    } else {
+      rawCOMMAND="cut -f 1-6"
+    }
+  }
+  {
+    #for unique and none mapping reads
+    if($1~"mapping=u" || $1~"mapping=n") {
+      #split concatenated full line into individual components
+       split($1,SPLITsam,/:SP:|:PC:/)
+      #split name tag into individual components
+       split(SPLITsam[1],SPLITname,/:|=/)
+      #split readID to obtain duplication-rate
+       split(SPLITname[1],SPLITid,/_/)
+      #split BED12 into individual components
+       split(SPLITsam[2], BED12, /:x:/)
+      #if annotation is pseudo or ncRNA change to none
+       if(SPLITname[8] ~ "pseudo|ncRNA"){
+         SPLITname[8]="none"
+       }
+      #split fine-ann
+        split($2,splitFINEann,/::TE:|::EX:/)
+        currFINEann=splitFINEann[2]
+        if(currFINEann=="") {
+          currFINEann="none"
+        }else{
+          if(currFINEann=="exon") {
+            currFINEann="CDS"
+          }
+        }
+
+      #print to fasta and bed
+       COMMAND=rawCOMMAND " > " TMP "_final_annotated.bed"
+       if( SPLITname[8] ~ FILTERING_INPUT ) {
+        print BED12[1],BED12[2],BED12[3],SPLITsam[1]":final_ann="SPLITname[8]":filtered=Y:mapcount=1:fine_ann="currFINEann,BED12[5],BED12[6],BED12[7],BED12[8],BED12[9],BED12[10],BED12[11],BED12[12] | COMMAND
+        print ">"SPLITsam[1]":final_ann="SPLITname[8]":filtered=Y:mapcount=1:fine_ann="currFINEann"\n"SPLITname[2] | "gzip > " TMP"_final_annotated.fa.gz"
+        SIZEall[length(SPLITname[2])]+=SPLITname[4]
+       }else{
+        print BED12[1],BED12[2],BED12[3],SPLITsam[1]":final_ann="SPLITname[8]":filtered=N:mapcount=1:fine_ann="currFINEann,BED12[5],BED12[6],BED12[7],BED12[8],BED12[9],BED12[10],BED12[11],BED12[12] | COMMAND
+        print ">"SPLITsam[1]":final_ann="SPLITname[8]":filtered=N:mapcount=1:fine_ann="currFINEann"\n"SPLITname[2] | "gzip > " TMP"_final_annotated.fa.gz"
+        SIZEall[length(SPLITname[2])]+=SPLITname[4]
+        SIZEfilt[length(SPLITname[2])]+=SPLITname[4]
+       }
+      #TE; rRNA or miRNA size profile plots
+       if(SPLITname[8]~"miRNA"){
+         SIZEmiRNA[length(SPLITname[2])]+=SPLITname[4]
+       }else{
+         if(SPLITname[8]~"rRNA"){
+          SIZErRNA[length(SPLITname[2])]+=SPLITname[4]
+         }else{
+           if(SPLITname[8]~"TE"){
+            SIZETE[length(SPLITname[2])]+=SPLITname[4]
+           }
+         }
+       }
+      #add read count to the corresponding annotations
+       ANN[SPLITname[8]]+=SPLITname[4]
+       FINAL_ANN[SPLITname[8]]+=SPLITname[4]
+       FINE_ANN[$2]+=SPLITname[4]
+      #get counts for duplication evaluation
+       TAGnumber[SPLITname[8]]+=SPLITid[3]
+      #get counts for duplication evaluation
+       ANNdepth[SPLITname[8]]+=SPLITname[4]
+      #count number of reads per annotation
+       READcount[SPLITname[8]]+=1
+
+    }
+    else {
+      #for multi mappers
+      #split concatenated sam line
+       split($1,SPLITsam,/:SP:|:PC:/)
+      #split name tag into individual components
+       split(SPLITsam[1],SPLITname,/:|=/)
+      #if annotation is pseudo or ncRNA change to none
+       if(SPLITname[8] ~ "pseudo|ncRNA"){
+         SPLITname[8]="none"
+       }
+      #put count into MULTI_ANN indexed by name of read and annotation
+       MULTI_ANN[SPLITname[1]][SPLITname[8]]+=SPLITname[4]
+      #put whole line into MULTI_LINE indexed by name of read and annotation
+       MULTI_LINE[SPLITname[1]][SPLITname[8]]=$0
+      #put mapping count into MULTICOUNT indexed by name of read
+       MULTI_COUNT[SPLITname[1]]+=1
+      #put full  line into MULTI_MAP for each mapping position of the read to output the annotated bed
+      ##containing all mappings
+       MULTI_MAP[SPLITname[1]][SPLITsam[2]]=$0
+    }
+  }
+  END {
+    for ( READ in MULTI_ANN) {
+      for ( RAWann in MULTI_ANN[READ] ) {
+        #if number of occurences for current RAWann for this READ is larger than the maximum count so far
+        if(MULTI_ANN[READ][RAWann] > MAX) {
+          #set all MAX variables to the new values
+           MAX=MULTI_ANN[READ][RAWann]
+           MAX_ANN=RAWann
+           MAX_LINE=MULTI_LINE[READ][RAWann]
+        } else {
+        #if number of occurences for current RAWann for this READ ties the maximum count so far
+        if(MULTI_ANN[READ][RAWann] == MAX){
+          #split current and maximum LINE to get access to the priorities of the annotaions
+           split(MULTI_LINE[READ][RAWann],SPLIT_MULTI_LINE,/\t/)
+           split(MAX_LINE,SPLIT_MAX_LINE,/\t/)
+          #if annotation priority of current annotation is lower set MAX variables to new values
+          if( SPLIT_MULTI_LINE[3] < SPLIT_MAX_LINE[3]){
+            MAX=MULTI_ANN[READ][RAWann]
+            MAX_ANN=RAWann
+            MAX_LINE=MULTI_LINE[READ][RAWann]
+            }
+          }
+        }
+      }
+      #report final annotations of multi mapping reads to the output file
+       Nfields=split(MAX_LINE,SPLIT_LINE,/:SP:| |\t/)
+       split(SPLIT_LINE[1],SPLITname,/:|=/)
+
+      #TE; rRNA or miRNA size profile plots
+       if(MAX_ANN~"miRNA"){
+         SIZEmiRNA[length(SPLITname[2])]+=SPLITname[4]
+       }else{
+         if(MAX_ANN~"rRNA"){
+          SIZErRNA[length(SPLITname[2])]+=SPLITname[4]
+         }else{
+           if(MAX_ANN~"TE"){
+            SIZETE[length(SPLITname[2])]+=SPLITname[4]
+           }
+         }
+       }
+      #add counts for multi mappers to ANN variables
+       FINAL_ANN[MAX_ANN]+=SPLITname[4]
+       FINE_ANN[SPLIT_LINE[3]]+=SPLITname[4]
+      #reset variable
+       MAX=0
+
+      #split fine-ann
+        split(SPLIT_LINE[3],splitFINEann,/::TE:|::EX:/)
+        currFINEann=splitFINEann[2]
+        if(currFINEann=="") {
+          currFINEann="none"
+        }else{
+          if(currFINEann=="exon") {
+            currFINEann="CDS"
+          }
+        }
+
+      #print to fasta
+       if( SPLITname[8] ~ FILTERING_INPUT ) {
+        print ">"SPLIT_LINE[1]":final_ann="MAX_ANN":filtered=Y:mapcount="MULTI_COUNT[READ]":fine_ann="currFINEann"\n"SPLITname[2] | "gzip > " TMP"_final_annotated.fa.gz"
+        SIZEall[length(SPLITname[2])]+=SPLITname[4]
+       }else{
+         print ">"SPLIT_LINE[1]":final_ann="MAX_ANN":filtered=N:mapcount="MULTI_COUNT[READ]":fine_ann="currFINEann"\n"SPLITname[2] | "gzip > " TMP"_final_annotated.fa.gz"
+         SIZEall[length(SPLITname[2])]+=SPLITname[4]
+         SIZEfilt[length(SPLITname[2])]+=SPLITname[4]
+       }
+
+      #print all mappings to the annotated-bed file
+      for(MAPPING in MULTI_MAP[READ]) {
+        split(MULTI_MAP[READ][MAPPING],SPLIT_LINE,/:SP:|:PC:/)
+        split(SPLIT_LINE[2],SPLITsam,/:x:/)
+
+        split(SPLIT_LINE[1], SPLITname, /:|=/)
+        #print to bed
+        if( SPLITname[8] ~ FILTERING_INPUT ) {
+          print SPLITsam[1],SPLITsam[2],SPLITsam[3],SPLIT_LINE[1]":final_ann="MAX_ANN":filtered=Y:mapcount="MULTI_COUNT[READ]":fine_ann="currFINEann,SPLITsam[5],SPLITsam[6],SPLITsam[7],SPLITsam[8],SPLITsam[9],SPLITsam[10],SPLITsam[11],SPLITsam[12] | COMMAND
+        }else{
+          print SPLITsam[1],SPLITsam[2],SPLITsam[3],SPLIT_LINE[1]":final_ann="MAX_ANN":filtered=N:mapcount="MULTI_COUNT[READ]":fine_ann="currFINEann,SPLITsam[5],SPLITsam[6],SPLITsam[7],SPLITsam[8],SPLITsam[9],SPLITsam[10],SPLITsam[11],SPLITsam[12] | COMMAND
+        }
+      }
+      #get counts for duplication evaluation (only useful for sRNA or other 8N protocols)
+       split(SPLITname[1],SPLITid,/_/)
+       TAGnumber[MAX_ANN]+=SPLITid[3]
+      #get counts for sequencing depth per annotation
+       ANNdepth[MAX_ANN]+=SPLITname[4]
+      #count number of reads per annotation
+       READcount[MAX_ANN]+=1
+
+    }
+    #report final counts for annotation groups
+    for(i in FINAL_ANN) {
+      print i,FINAL_ANN[i] > TMP"_final_counts.txt"
+    }
+    #report split-up counts for TEs and mRNAs
+    for(i in FINE_ANN) {
+      if(i ~ "TE" ) {
+        print i,FINE_ANN[i] > TMP"_splitup_TE.txt"
+      } else {
+        if(i ~ "mRNA"){
+          print i,FINE_ANN[i] > TMP"_splitup_mRNA.txt"
+        }
+      }
+    }
+    #report average duplication rate per annotation
+    for (xANN in TAGnumber) {
+      totTAGnumber+=TAGnumber[xANN]
+      totREADcount+=READcount[xANN]
+      print xANN,TAGnumber[xANN],READcount[xANN] > TMP"_duplication.txt"
+    }
+
+    #report average sequencing depth
+    for (xANN in ANNdepth) {
+      totANNdepth+=ANNdepth[xANN]
+      totREADcount+=READcount[xANN]
+      print xANN,ANNdepth[xANN],READcount[xANN] > TMP"_depth.txt"
+    }
+
+    #report size profiles and add a 0 count for all possible sizes to not miss one
+    for (i=MINlength; i<=MAXlength; i++) SIZEall[i]+=0
+    n = asorti(SIZEall, SIZEallsort, "@ind_num_asc")
+    for (i = 1; i <= n; i++) {
+      print SIZEallsort[i],SIZEall[SIZEallsort[i]] > TMP"_size-profile_all.txt"
+    }
+    for (i=MINlength; i<=MAXlength; i++) SIZEfilt[i]+=0
+    n = asorti(SIZEfilt, SIZEfiltsort, "@ind_num_asc")
+    for (i = 1; i <= n; i++) {
+      print SIZEfiltsort[i],SIZEfilt[SIZEfiltsort[i]] > TMP"_size-profile_filtered.txt"
+    }
+    for (i=MINlength; i<=MAXlength; i++) SIZEmiRNA[i]+=0
+    n = asorti(SIZEmiRNA, SIZEmiRNAsort, "@ind_num_asc")
+    for (i = 1; i <= n; i++) {
+      print SIZEmiRNAsort[i],SIZEmiRNA[SIZEmiRNAsort[i]] > TMP"_size-profile_miRNA.txt"
+    }
+    for (i=MINlength; i<=MAXlength; i++) SIZErRNA[i]+=0
+    n = asorti(SIZErRNA, SIZErRNAsort, "@ind_num_asc")
+    for (i = 1; i <= n; i++) {
+      print SIZErRNAsort[i],SIZErRNA[SIZErRNAsort[i]] > TMP"_size-profile_rRNA.txt"
+    }
+    for (i=MINlength; i<=MAXlength; i++) SIZETE[i]+=0
+    n = asorti(SIZETE, SIZETEsort, "@ind_num_asc")
+    for (i = 1; i <= n; i++) {
+      print SIZETEsort[i],SIZETE[SIZETEsort[i]] > TMP"_size-profile_TE.txt"
+    }
+  }
+' $IN
+
+}
+
+
+#collectDATA for GEO submission
+collectDATA() {
+  #define variables
+  NAME=$1
+  TMPdir=$2
+  FOLDER=$3
+  TYPE=$4
+  locTMP=$5
+
+  #copy raw bam and add md5 sum for raw to the output-file
+  if [[ -f ${TMPdir}${NAME}/${NAME}_demuxed_1.bam ]]; then
+    cp ${TMPdir}${NAME}/${NAME}_demuxed_1.bam ${FOLDER}GEO/RAW/${NAME}_1.bam
+    SUM=$(cat ${TMPdir}${NAME}/raw_1.md5 | tr ' ' '\t' | cut -f 2)
+    echo ${NAME}_1.bam $SUM | tr ' ' '\t' >>${FOLDER}GEO/md5_Sum_RAW.tmp
+
+    cp ${TMPdir}${NAME}/${NAME}_demuxed_2.bam ${FOLDER}GEO/RAW/${NAME}_2.bam
+    SUM=$(cat ${TMPdir}${NAME}/raw_2.md5 | tr ' ' '\t' | cut -f 2)
+    echo ${NAME}_2.bam $SUM | tr ' ' '\t' >>${FOLDER}GEO/md5_Sum_RAW.tmp
+  else
+    cp ${TMPdir}${NAME}/${NAME}_demuxed.bam ${FOLDER}GEO/RAW/${NAME}.bam
+    SUM=$(cat ${TMPdir}${NAME}/raw.md5 | tr ' ' '\t' | cut -f 2)
+    echo ${NAME}.bam $SUM | tr ' ' '\t' >>${FOLDER}GEO/md5_Sum_RAW.tmp
+  fi
+  #copy over all bigwig files and compute md5 sum
+  if [[ $TYPE != CHIPseq && $TYPE != DNAseq ]]; then
+    for MULTI in uniq all; do
+      for STRAND in sense antisense; do
+        cp ${FOLDER}hubs/${MULTI}/dm6/${NAME}_${MULTI}_${STRAND}.bw ${FOLDER}GEO/BW/${NAME}_${MULTI}_${STRAND}.bw
+        SUM=$(md5sum ${FOLDER}GEO/BW/${NAME}_${MULTI}_${STRAND}.bw)
+        echo ${NAME}_${MULTI}_${STRAND}.bw $SUM | tr ' ' '\t' >>${FOLDER}GEO/md5_Sum_BW.tmp
+      done
+    done
+  else
+    for MULTI in uniq all; do
+      cp ${FOLDER}hubs/${MULTI}/dm6/${NAME}_${MULTI}.bw ${FOLDER}GEO/BW/${NAME}_${MULTI}.bw
+      SUM=$(md5sum ${FOLDER}GEO/BW/${NAME}_${MULTI}.bw)
+      echo ${NAME}_${MULTI}.bw $SUM | tr ' ' '\t' >>${FOLDER}GEO/md5_Sum_BW.tmp
+    done
+  fi
+
+  #prepare sequence count files for individual libraries
+  if [[ $TYPE == sRNAseq ]] || [[ $TYPE == sRNAseqIP ]]; then
+    #process mapped-reads for read counts
+    gunzip -c ${FOLDER}individual-libraries/${NAME}/${NAME}_annotated.fa.gz |
+      mawk -v OFS="\t" -v NAME=$NAME '
+      {
+        if($1~">") {
+          split($1,splitNAME,/\:|\=/)
+          print splitNAME[2], NAME, splitNAME[4]  
+        }
+      }' >${locTMP}${NAME}seqCOUNTs.txt
+  fi
+
+}

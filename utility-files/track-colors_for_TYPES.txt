@@ -1,0 +1,10 @@
+1 sRNAseq 0,0,0
+2 sRNAseqIP 0,0,0
+3 RNAseq  0,128,0
+4 CHIPseq 0,90,255
+5 DNAseq 0,90,255
+6 CLIPseq 255,165,0
+7 GROseq  0,128,128
+8 RNAseq_QuantSeq  90,128,0
+9 CapSeq  0,51,102
+10 RIPseq 0,200,255

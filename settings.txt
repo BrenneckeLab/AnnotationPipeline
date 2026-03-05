@@ -1,0 +1,42 @@
+#specify the default flybase versions for dm3 and dm6 [ r#.## ]
+default_VERSION_dm3="r5.57"
+default_VERSION_dm6="r6.40"
+default_VERSION_Cel="WS292"
+
+#specify where the indexes should be stored - has to be on permanent storage
+##do not place within the AnnotationPipeline directory 
+BASE_UTILITY_LOCATION="" 
+
+#specify the location to permanently store demultiplexed bam-files 
+##do not place within the AnnotationPipeline directory 
+BASE_LIBRARY_STORAGE_LOCATION=
+
+#specify a path for the open directory - has to be on permanent storage and has to be web-accessible
+##do not place within the AnnotationPipeline directory 
+BASE_FOLDER=""
+
+#specify http adresse for open directory
+HTTP_PATH=""
+
+#specify a path for the temporary directory - should be on clustertmp
+##do not place within the AnnotationPipeline directory 
+BASE_FOLDER_TMP=""
+
+#set to N if you do not want to run Index creation
+RUN_INSTALLATION=Y
+
+#Hyperthreading
+##set to Y if your system has hyperthreading activated
+HYPER=N
+
+#if required add SBATCH definitions for your current system
+#per default the following variables will be set
+#SBATCH --cpus-per-task=
+#SBATCH --mem=
+#SBATCH -e "%x.e.%j.txt"
+#SBATCH -o "%x.o.%j.txt"
+#SBATCH --time=
+
+#if your system requires additional specifications please add them in the line after #@!@#
+#e.g. #SBATCH --qos=short
+#@!@#
